@@ -100,7 +100,8 @@ void init_db() {
         "source_path TEXT PRIMARY KEY,"
         "recup_dir TEXT,"
         "detected_type TEXT,"
-        "sha256 TEXT,"
+        "sha256 TEXT UNIQUE,"
+        "filesize INTEGER,"
         "destination_path TEXT,"
         "status TEXT,"
         "processed_at TEXT"
@@ -141,6 +142,7 @@ void mark_processed(
     const std::string &recup,
     const std::string &type,
     const std::string &hash,
+    uintmax_t filesize,
     const std::string &dst,
     const std::string &status
 ) {
@@ -148,8 +150,8 @@ void mark_processed(
 
     const char *sql =
         "INSERT OR REPLACE INTO processed_files "
-        "(source_path, recup_dir, detected_type, sha256, destination_path, status, processed_at) "
-        "VALUES (?,?,?,?,?,?,datetime('now'));";
+        "(source_path, recup_dir, detected_type, sha256, filesize, destination_path, status, processed_at) "
+        "VALUES (?,?,?,?,?,?,?,datetime('now'));";
 
     sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
 
@@ -157,8 +159,9 @@ void mark_processed(
     sqlite3_bind_text(stmt, 2, recup.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 3, type.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 4, hash.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 5, dst.c_str(), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 6, status.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 5, static_cast<sqlite3_int64>(filesize));
+    sqlite3_bind_text(stmt, 6, dst.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 7, status.c_str(), -1, SQLITE_STATIC);
 
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -202,6 +205,7 @@ void process_file(const fs::path &file, const std::string &recup_dir) {
     std::string header(header_buf, f.gcount());
 
     std::string type = detect_filetype(header);
+    uintmax_t filesize = fs::file_size(file);
     std::string hash = sha256_file(file);
 
     if (hash.empty()) return;
@@ -218,10 +222,10 @@ void process_file(const fs::path &file, const std::string &recup_dir) {
 
     try {
         fs::rename(file, dest);
-        mark_processed(src, recup_dir, type, hash, dest.string(), "success");
+        mark_processed(src, recup_dir, type, hash, filesize, dest.string(), "success");
     }
     catch (...) {
-        mark_processed(src, recup_dir, type, hash, dest.string(), "error");
+        mark_processed(src, recup_dir, type, hash, filesize, dest.string(), "error");
     }
 }
 
