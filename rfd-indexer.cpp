@@ -11,27 +11,20 @@
 
 namespace fs = std::filesystem;
 
-// =========================================================
 // CONFIG
-// =========================================================
-
+// maybe turn into config file in the future
 static const std::string SOURCE_ROOT = "/path/to/recovered";
 static const std::string DEST_ROOT   = "/path/to/sorted";
 
-// =========================================================
+
 // MAGIC DETECTION
-// =========================================================
 magic_t magic_cookie;
-
 std::string detect_filetype(const fs::path &file) {
-
     const char *result = magic_file(magic_cookie, file.c_str());
-
     if (!result) return "unknown";
 
-    std::string mime(result);
+    std::string mime(result);// libmagic returns like: "image/jpeg; charset=binary"
 
-    // libmagic returns like: "image/jpeg; charset=binary"
     size_t semi = mime.find(';');
     if (semi != std::string::npos) {
         mime = mime.substr(0, semi);
@@ -39,16 +32,13 @@ std::string detect_filetype(const fs::path &file) {
 
     size_t slash = mime.find('/');
     if (slash != std::string::npos) {
-        return mime.substr(slash + 1); // jpeg, png, pdf, etc.
+        return mime.substr(slash + 1); // separated filetype
     }
 
     return "unknown";
 }
 
-// =========================================================
-// SHA256
-// =========================================================
-
+// HASHING
 std::string sha256_file(const fs::path &file) {
     unsigned char hash[SHA256_DIGEST_LENGTH];
 
@@ -59,19 +49,15 @@ std::string sha256_file(const fs::path &file) {
     SHA256_Init(&ctx);
 
     std::vector<char> buffer(1024 * 1024);
-
     while (f.good()) {
         f.read(buffer.data(), buffer.size());
         SHA256_Update(&ctx, buffer.data(), f.gcount());
     }
-
     SHA256_Final(hash, &ctx);
 
     std::string hex;
     hex.reserve(64);
-
     static const char *digits = "0123456789abcdef";
-
     for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
         hex.push_back(digits[(hash[i] >> 4) & 0xF]);
         hex.push_back(digits[hash[i] & 0xF]);
@@ -80,10 +66,7 @@ std::string sha256_file(const fs::path &file) {
     return hex;
 }
 
-// =========================================================
-// SQLITE
-// =========================================================
-
+// DB
 sqlite3 *db;
 
 void init_db() {
@@ -92,7 +75,6 @@ void init_db() {
     std::string db_path = DEST_ROOT + "/sorting_progress.db";
 
     sqlite3_open(db_path.c_str(), &db);
-
     sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
 
     const char *sql =
@@ -108,36 +90,11 @@ void init_db() {
         ");";
 
     sqlite3_exec(db, sql, nullptr, nullptr, nullptr);
-
-    sqlite3_exec(db,
-        "CREATE INDEX IF NOT EXISTS idx_sha256 ON processed_files(sha256);",
+    sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_sha256 ON processed_files(sha256);",
         nullptr, nullptr, nullptr);
 }
 
-// =========================================================
-// DB CHECK
-// =========================================================
-
-bool already_seen_hash(const std::string &hash) {
-    sqlite3_stmt *stmt;
-
-    const char *sql = "SELECT 1 FROM processed_files WHERE sha256=? LIMIT 1;";
-
-    sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
-    sqlite3_bind_text(stmt, 1, hash.c_str(), -1, SQLITE_STATIC);
-
-    bool exists = sqlite3_step(stmt) == SQLITE_ROW;
-
-    sqlite3_finalize(stmt);
-
-    return exists;
-}
-
-// =========================================================
-// INSERT
-// =========================================================
-
-void mark_processed(
+bool insert(
     const std::string &src,
     const std::string &recup,
     const std::string &type,
@@ -163,35 +120,35 @@ void mark_processed(
     sqlite3_bind_text(stmt, 6, dst.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 7, status.c_str(), -1, SQLITE_STATIC);
 
-    sqlite3_step(stmt);
+    int rc = sqlite3_step(stmt);
+
+    if (rc == SQLITE_CONSTRAINT) {
+        sqlite3_finalize(stmt);
+        return false;
+    }
+
     sqlite3_finalize(stmt);
+    return true;
 }
 
-// =========================================================
-// DEST HELPERS
-// =========================================================
-
-fs::path build_dest(const fs::path &dir, const std::string &name) {
+// DESTINATION PATH HELPER
+fs::path build_unique_dest_path(const fs::path &dir, const std::string &name) {
     fs::path p = dir / name;
 
     if (!fs::exists(p)) return p;
 
+    // create unique filename - append incremental index
     int i = 1;
     fs::path base = p;
-
     while (fs::exists(p)) {
         p = base.parent_path() /
             (base.stem().string() + "_" + std::to_string(i) + base.extension().string());
         i++;
     }
-
     return p;
 }
 
-// =========================================================
 // PROCESS FILE
-// =========================================================
-
 void process_file(const fs::path &file, const std::string &recup_dir) {
 
     std::string src = fs::absolute(file).string();
@@ -199,33 +156,50 @@ void process_file(const fs::path &file, const std::string &recup_dir) {
     std::ifstream f(file, std::ios::binary);
     if (!f) return;
 
+    // read filetype from header
     char header_buf[64] = {0};
     f.read(header_buf, sizeof(header_buf));
-
     std::string header(header_buf, f.gcount());
-
     std::string type = detect_filetype(header);
+
     uintmax_t filesize = fs::file_size(file);
+
     std::string hash = sha256_file(file);
+    fs::path dest_dir;
 
-    if (hash.empty()) return;
+    if (hash.empty())
+        dest_dir = fs::path(DEST_ROOT) / "quarantine" / type / recup_dir;
+    else
+        dest_dir = fs::path(DEST_ROOT) / type / recup_dir;
 
-    if (already_seen_hash(hash)) {
-        // duplicate detected (optional skip logic)
+    fs::path dest = build_unique_dest_path(dest_dir, file.filename().string());
+
+    // reserve hash in DB FIRST
+    bool inserted = insert(
+        src,
+        recup_dir,
+        type,
+        hash,
+        filesize,
+        dest.string(),
+        "pending"
+    );
+
+    // duplicate content
+    if (!inserted) {
+        std::cout << "Duplicate: " << file << "\n";
+        fs::remove(file);
+
         return;
     }
 
-    fs::path dest_dir = fs::path(DEST_ROOT) / type / recup_dir;
-    fs::create_directories(dest_dir);
-
-    fs::path dest = build_dest(dest_dir, file.filename().string());
-
     try {
+        fs::create_directories(dest_dir);
         fs::rename(file, dest);
-        mark_processed(src, recup_dir, type, hash, filesize, dest.string(), "success");
+        update_status(hash, "success");
     }
     catch (...) {
-        mark_processed(src, recup_dir, type, hash, filesize, dest.string(), "error");
+        update_status(hash, "error");
     }
 }
 
