@@ -14,6 +14,7 @@
 namespace fs = std::filesystem;
 
 // CONFIG
+#define DBG
 std::unordered_map<std::string, std::string> config;
 
 void load_config(const std::string &path) {
@@ -37,10 +38,36 @@ void load_config(const std::string &path) {
     }
 }
 
+// HELPERS
+
+fs::path build_unique_dest_path(const fs::path &dir, const std::string &name) {
+    fs::path p = dir / name;
+
+    if (!fs::exists(p)) return p;
+
+    // create unique filename - append incremental index
+    int i = 1;
+    fs::path base = p;
+    while (fs::exists(p)) {
+        p = base.parent_path() /
+            (base.stem().string() + "_" + std::to_string(i) + base.extension().string());
+        i++;
+    }
+    return p;
+}
+
+void logd(std::string message, auto variable){
+#ifdef DBG
+    std::cout << "[DEBUG]    " << message << variable << std::endl;
+#endif
+}
+
 // MAGIC DETECTION
 magic_t magic_cookie;
 std::string detect_filetype(const fs::path &file) {
     const char *result = magic_file(magic_cookie, file.c_str());
+    logd("mime type: ",  result);
+
     if (!result) return "unknown";
 
     std::string mime(result);// libmagic returns like: "image/jpeg; charset=binary"
@@ -186,50 +213,30 @@ void update_status(const std::string &src, const std::string &status) {
     sqlite3_finalize(stmt);
 }
 
-// DESTINATION PATH HELPER
-fs::path build_unique_dest_path(const fs::path &dir, const std::string &name) {
-    fs::path p = dir / name;
-
-    if (!fs::exists(p)) return p;
-
-    // create unique filename - append incremental index
-    int i = 1;
-    fs::path base = p;
-    while (fs::exists(p)) {
-        p = base.parent_path() /
-            (base.stem().string() + "_" + std::to_string(i) + base.extension().string());
-        i++;
-    }
-    return p;
-}
-
 // PROCESS FILE
 void process_file(const fs::path &file, const std::string &recup_dir) {
 
     std::string src = fs::absolute(file).string();
+    logd("src: ",  src);
 
     uintmax_t filesize = fs::file_size(file);
+    logd("filesize: ",  filesize);
     if (filesize <= 0){
         std::cout << "Empty file, skipped: " << file << std::endl;
         fs::remove(file);
         return;
     }
 
-    std::ifstream f(file, std::ios::binary);
-    if (!f){
-        std::cerr << "Could not open file: " << file << std::endl;
-        return;
-    }
-
-    // read filetype from header
-    char header_buf[64] = {0};
-    f.read(header_buf, sizeof(header_buf));
-    std::string header(header_buf, f.gcount());
-    std::string type = detect_filetype(header);
+    // read filetype
+    std::string type = detect_filetype(file);
+    logd("type: ",  type);
 
     std::string hash = sha256_file(file);
+    logd("hash: ",  hash);
+
     fs::path dest_dir = fs::path(config["DEST_ROOT"]) / type / recup_dir;
     fs::path path = build_unique_dest_path(dest_dir, file.filename().string());
+    logd("path: ",  path);
 
     // try insert, reserve in DB
     bool inserted = insert(src, recup_dir, type, hash, filesize, path.string(), "pending");
@@ -253,7 +260,6 @@ void process_file(const fs::path &file, const std::string &recup_dir) {
 }
 
 // MAIN
-
 int main() {
     load_config(".config");
     init_db();
