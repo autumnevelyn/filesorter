@@ -6,16 +6,36 @@
 #include <unordered_map>
 #include <sqlite3.h>
 #include <magic.h>
+#include <algorithm>
+#include <sstream>
 
 #include <openssl/sha.h>
 
 namespace fs = std::filesystem;
 
 // CONFIG
-// maybe turn into config file in the future
-static const std::string SOURCE_ROOT = "/path/to/recovered";
-static const std::string DEST_ROOT   = "/path/to/sorted";
+std::unordered_map<std::string, std::string> config;
 
+void load_config(const std::string &path) {
+    std::ifstream file(path);
+    std::string line;
+
+    while (std::getline(file, line)) {
+
+        // skip comments / empty lines
+        if (line.empty() || line[0] == '#')
+            continue;
+
+        auto pos = line.find('=');
+        if (pos == std::string::npos)
+            continue;
+
+        std::string key = line.substr(0, pos);
+        std::string value = line.substr(pos + 1);
+
+        config[key] = value;
+    }
+}
 
 // MAGIC DETECTION
 magic_t magic_cookie;
@@ -70,9 +90,9 @@ std::string sha256_file(const fs::path &file) {
 sqlite3 *db;
 
 void init_db() {
-    fs::create_directories(DEST_ROOT);
+    fs::create_directories(config["DEST_ROOT"]);
 
-    std::string db_path = DEST_ROOT + "/sorting_progress.db";
+    fs::path db_path = fs::path(config["DEST_ROOT"]) / config["DB_NAME"];
 
     sqlite3_open(db_path.c_str(), &db);
     sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
@@ -151,6 +171,21 @@ bool insert(
     return true;
 }
 
+void update_status(const std::string &src, const std::string &status) {
+    sqlite3_stmt *stmt;
+
+    const char *sql =
+        "UPDATE processed_files SET status=? WHERE src=?;";
+
+    sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
+
+    sqlite3_bind_text(stmt, 1, status.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, src.c_str(), -1, SQLITE_TRANSIENT);
+
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
 // DESTINATION PATH HELPER
 fs::path build_unique_dest_path(const fs::path &dir, const std::string &name) {
     fs::path p = dir / name;
@@ -182,7 +217,7 @@ void process_file(const fs::path &file, const std::string &recup_dir) {
 
     std::ifstream f(file, std::ios::binary);
     if (!f){
-        std::err << "Could not open file: " << file << std::endl;
+        std::cerr << "Could not open file: " << file << std::endl;
         return;
     }
 
@@ -193,7 +228,7 @@ void process_file(const fs::path &file, const std::string &recup_dir) {
     std::string type = detect_filetype(header);
 
     std::string hash = sha256_file(file);
-    fs::path dest_dir = fs::path(DEST_ROOT) / type / recup_dir;
+    fs::path dest_dir = fs::path(config["DEST_ROOT"]) / type / recup_dir;
     fs::path path = build_unique_dest_path(dest_dir, file.filename().string());
 
     // try insert, reserve in DB
@@ -210,16 +245,17 @@ void process_file(const fs::path &file, const std::string &recup_dir) {
     try {
         fs::create_directories(dest_dir);
         fs::rename(file, path);
-        update_status(hash, "success");
+        update_status(src, "success");
     }
     catch (...) {
-        update_status(hash, "error");
+        update_status(src, "error");
     }
 }
 
 // MAIN
 
 int main() {
+    load_config("config.ini");
     init_db();
 
     magic_cookie = magic_open(MAGIC_MIME_TYPE);
@@ -236,7 +272,7 @@ int main() {
 
     std::vector<fs::path> recups;
 
-    for (auto &p : fs::directory_iterator(SOURCE_ROOT)) {
+    for (auto &p : fs::directory_iterator(config["SOURCE_ROOT"])) {
         if (p.is_directory() &&
             p.path().filename().string().find("recup_dir.") == 0) {
             recups.push_back(p.path());

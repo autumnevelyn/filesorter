@@ -1,0 +1,1 @@
+build-essential g++ libsqlite3-dev libssl-dev libmagic-dev
