@@ -93,6 +93,7 @@ void init_db() {
     sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_sha256 ON processed_files(sha256);",
         nullptr, nullptr, nullptr);
 }
+
 void bindTextOrNull(sqlite3_stmt* stmt,
                     int index,
                     const std::string& value)
