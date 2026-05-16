@@ -1,173 +1,250 @@
 #!/usr/bin/env python3
 
 import os
-import random
 import shutil
+import random
 from pathlib import Path
 
 # =========================================================
 # CONFIG
 # =========================================================
 
-OUTPUT_ROOT = Path("./mock_recovery_dump")
+ROOT = Path("./mock_recovery").resolve()
 
-NUM_RECUP_DIRS = 10
-
-FILES_PER_DIR = 50
-
-# If True, wipes existing mock directory first
-DELETE_EXISTING = True
-
-# =========================================================
-# FILE TEMPLATES
-# =========================================================
-
-FILE_TYPES = {
-
-    "jpeg": {
-        "signature": b"\xFF\xD8\xFF\xE0",
-        "extension": ".jpg",
-        "payload_size": 2048
-    },
-
-    "png": {
-        "signature": b"\x89PNG\r\n\x1a\n",
-        "extension": ".png",
-        "payload_size": 4096
-    },
-
-    "gif": {
-        "signature": b"GIF89a",
-        "extension": ".gif",
-        "payload_size": 1024
-    },
-
-    "pdf": {
-        "signature": b"%PDF-1.4\n",
-        "extension": ".pdf",
-        "payload_size": 8192
-    },
-
-    "zip": {
-        "signature": b"PK\x03\x04",
-        "extension": ".zip",
-        "payload_size": 4096
-    },
-
-    "mp3": {
-        "signature": b"ID3",
-        "extension": ".mp3",
-        "payload_size": 8192
-    },
-
-    "mp4": {
-        "signature": (
-            b"\x00\x00\x00\x18"
-            b"ftypmp42"
-        ),
-        "extension": ".mp4",
-        "payload_size": 16384
-    },
-
-    "unknown": {
-        "signature": os.urandom(16),
-        "extension": ".bin",
-        "payload_size": 2048
-    }
-}
+RECREATE = True
 
 # =========================================================
 # HELPERS
 # =========================================================
 
-def random_bytes(size):
-    return os.urandom(size)
+JPEG_HEADER = bytes([
+    0xFF, 0xD8, 0xFF, 0xE0,
+    0x00, 0x10, 0x4A, 0x46,
+    0x49, 0x46, 0x00
+])
 
+PNG_HEADER = bytes([
+    0x89, 0x50, 0x4E, 0x47,
+    0x0D, 0x0A, 0x1A, 0x0A
+])
 
-def generate_file_content(filetype_info):
+PDF_HEADER = b"%PDF-1.4\n"
 
-    signature = filetype_info["signature"]
+ZIP_HEADER = bytes([
+    0x50, 0x4B, 0x03, 0x04
+])
 
-    payload_size = filetype_info["payload_size"]
+MP4_HEADER = bytes([
+    0x00, 0x00, 0x00, 0x18,
+    0x66, 0x74, 0x79, 0x70,
+    0x6D, 0x70, 0x34, 0x32
+])
 
-    payload = random_bytes(payload_size)
+# =========================================================
+# FILE WRITER
+# =========================================================
 
-    return signature + payload
-
-
-def create_mock_file(directory, filename, filetype_info):
-
-    path = directory / filename
-
-    content = generate_file_content(filetype_info)
+def write_file(path: Path, header: bytes, size: int = 1024):
 
     with open(path, "wb") as f:
-        f.write(content)
 
+        f.write(header)
+
+        remaining = max(0, size - len(header))
+
+        f.write(os.urandom(remaining))
 
 # =========================================================
-# MAIN GENERATION
+# CLEAN
 # =========================================================
 
-def main():
+if RECREATE and ROOT.exists():
+    shutil.rmtree(ROOT)
 
-    if DELETE_EXISTING and OUTPUT_ROOT.exists():
+ROOT.mkdir(parents=True, exist_ok=True)
 
-        print(f"Deleting existing directory: {OUTPUT_ROOT}")
+# =========================================================
+# CREATE RECUP DIRS
+# =========================================================
 
-        shutil.rmtree(OUTPUT_ROOT)
+recup_dirs = []
 
-    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+for i in range(1, 6):
 
-    print(f"Creating mock recovery dump at:")
-    print(f"  {OUTPUT_ROOT}")
-    print()
+    d = ROOT / f"recup_dir.{i}"
 
-    filetype_names = list(FILE_TYPES.keys())
+    d.mkdir(parents=True, exist_ok=True)
 
-    total_files = 0
+    recup_dirs.append(d)
 
-    for dir_index in range(1, NUM_RECUP_DIRS + 1):
+# =========================================================
+# NORMAL FILES
+# =========================================================
 
-        recup_dir = OUTPUT_ROOT / f"recup_dir.{dir_index}"
+print("Creating normal files...")
 
-        recup_dir.mkdir(parents=True, exist_ok=True)
+write_file(
+    recup_dirs[0] / "photo1.jpg",
+    JPEG_HEADER,
+    5000
+)
 
-        print(f"Creating {recup_dir.name}")
+write_file(
+    recup_dirs[0] / "image.png",
+    PNG_HEADER,
+    7000
+)
 
-        for file_index in range(1, FILES_PER_DIR + 1):
+write_file(
+    recup_dirs[1] / "document.pdf",
+    PDF_HEADER,
+    9000
+)
 
-            chosen_type = random.choice(filetype_names)
+write_file(
+    recup_dirs[1] / "archive.zip",
+    ZIP_HEADER,
+    12000
+)
 
-            type_info = FILE_TYPES[chosen_type]
+write_file(
+    recup_dirs[2] / "video.mp4",
+    MP4_HEADER,
+    16000
+)
 
-            extension = type_info["extension"]
+# =========================================================
+# DUPLICATE CONTENT TEST
+# =========================================================
 
-            # Intentionally messy filenames
-            filename_styles = [
+print("Creating duplicate-content files...")
 
-                f"f{file_index}{extension}",
-                f"recovered_{file_index}",
-                f"image_{random.randint(1000,9999)}{extension}",
-                f"file_{random.randint(10000,99999)}",
-                f"data_{file_index}.dat",
-            ]
+duplicate_payload = JPEG_HEADER + os.urandom(8192)
 
-            filename = random.choice(filename_styles)
+with open(recup_dirs[2] / "dup1.jpg", "wb") as f:
+    f.write(duplicate_payload)
 
-            create_mock_file(
-                recup_dir,
-                filename,
-                type_info
-            )
+with open(recup_dirs[3] / "dup2.jpg", "wb") as f:
+    f.write(duplicate_payload)
 
-            total_files += 1
+with open(recup_dirs[4] / "dup3.bin", "wb") as f:
+    f.write(duplicate_payload)
 
-    print()
-    print("Done.")
-    print(f"Created {NUM_RECUP_DIRS} recup dirs")
-    print(f"Created {total_files} files")
+# =========================================================
+# SAME NAME COLLISION TEST
+# =========================================================
 
+print("Creating filename collision files...")
 
-if __name__ == "__main__":
-    main()
+write_file(
+    recup_dirs[0] / "collision.jpg",
+    JPEG_HEADER,
+    4000
+)
+
+write_file(
+    recup_dirs[1] / "collision.jpg",
+    JPEG_HEADER,
+    6000
+)
+
+write_file(
+    recup_dirs[2] / "collision.jpg",
+    JPEG_HEADER,
+    8000
+)
+
+# =========================================================
+# WRONG EXTENSION TESTS
+# =========================================================
+
+print("Creating wrong-extension files...")
+
+write_file(
+    recup_dirs[3] / "fakejpg.jpg",
+    PDF_HEADER,
+    5000
+)
+
+write_file(
+    recup_dirs[3] / "not_a_zip.zip",
+    JPEG_HEADER,
+    5000
+)
+
+write_file(
+    recup_dirs[4] / "movie.mp4",
+    PNG_HEADER,
+    5000
+)
+
+# =========================================================
+# EXTENSIONLESS FILES
+# =========================================================
+
+print("Creating extensionless files...")
+
+write_file(
+    recup_dirs[4] / "mysteryfile",
+    ZIP_HEADER,
+    7000
+)
+
+# =========================================================
+# EMPTY FILES
+# =========================================================
+
+print("Creating empty files...")
+
+(recup_dirs[0] / "empty1.bin").touch()
+
+(recup_dirs[1] / "empty2.jpg").touch()
+
+# =========================================================
+# CORRUPTED / PARTIAL FILES
+# =========================================================
+
+print("Creating corrupted files...")
+
+with open(recup_dirs[2] / "corrupt_partial_png.png", "wb") as f:
+    f.write(PNG_HEADER[:4])
+
+with open(recup_dirs[3] / "corrupt_partial_pdf.pdf", "wb") as f:
+    f.write(b"%PD")
+
+# =========================================================
+# RANDOM UNKNOWN FILES
+# =========================================================
+
+print("Creating unknown/random files...")
+
+for i in range(5):
+
+    with open(recup_dirs[random.randint(0, 4)] / f"random_{i}.dat", "wb") as f:
+        f.write(os.urandom(random.randint(512, 4096)))
+
+# =========================================================
+# PERMISSION FAILURE TEST (optional)
+# =========================================================
+
+print("Creating unreadable file...")
+
+unreadable = recup_dirs[4] / "unreadable.bin"
+
+write_file(
+    unreadable,
+    ZIP_HEADER,
+    4096
+)
+
+try:
+    unreadable.chmod(0)
+except Exception:
+    print("Could not remove permissions (non-POSIX filesystem?)")
+
+# =========================================================
+# DONE
+# =========================================================
+
+print("\nDone.")
+print(f"Mock recovery tree created at:\n{ROOT}")
