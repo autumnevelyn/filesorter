@@ -255,7 +255,7 @@ void process_file(const fs::path &file, const std::string &recup_dir) {
 // MAIN
 
 int main() {
-    load_config("config.ini");
+    load_config(".config");
     init_db();
 
     magic_cookie = magic_open(MAGIC_MIME_TYPE);
