@@ -1,4 +1,4 @@
-/sorted
-/mock_recovery
+test/*
+!test/*.sh
+!test/*.py
 filesorter
-.config

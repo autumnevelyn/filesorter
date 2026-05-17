@@ -65,12 +65,16 @@ void logd(std::string message, auto variable){
 // MAGIC DETECTION
 magic_t magic_cookie;
 std::string detect_filetype(const fs::path &file) {
+    const std::string UNKNOWN_TYPE = "unknown" 
     const char *result = magic_file(magic_cookie, file.c_str());
     logd("mime type: ",  result);
 
-    if (!result) return "unknown";
+    if (!result) return UNKNOWN_TYPE;
 
-    std::string mime(result);// libmagic returns like: "image/jpeg; charset=binary"
+    std::string mime(result); // libmagic returns like: "image/jpeg; charset=binary"
+
+    if (mime == "application/octet-stream")
+        return UNKNOWN_TYPE; // binary blob
 
     size_t semi = mime.find(';');
     if (semi != std::string::npos) {
@@ -82,7 +86,7 @@ std::string detect_filetype(const fs::path &file) {
         return mime.substr(slash + 1); // separated filetype
     }
 
-    return "unknown";
+    return UNKNOWN_TYPE;
 }
 
 // HASHING
@@ -145,7 +149,7 @@ void bindTextOrNull(sqlite3_stmt* stmt,
                     int index,
                     const std::string& value)
 {
-    if (value.empty() || value == "unknown")
+    if (value.empty())
     {
         sqlite3_bind_null(stmt, index);
     }
@@ -173,19 +177,19 @@ bool insert(
     sqlite3_stmt *stmt;
 
     const char *sql =
-        "INSERT OR REPLACE INTO processed_files "
+        "INSERT INTO processed_files "
         "(source_path, recup_dir, detected_type, sha256, filesize, destination_path, status, processed_at) "
         "VALUES (?,?,?,?,?,?,?,datetime('now'));";
 
     sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
 
-    bindTextOrNull(stmt, 1, src.c_str());
-    bindTextOrNull(stmt, 2, recup.c_str());
-    bindTextOrNull(stmt, 3, type.c_str());
-    bindTextOrNull(stmt, 4, hash.c_str());
+    bindTextOrNull(stmt, 1, src);
+    bindTextOrNull(stmt, 2, recup);
+    bindTextOrNull(stmt, 3, type);
+    bindTextOrNull(stmt, 4, hash);
     sqlite3_bind_int64(stmt, 5, static_cast<sqlite3_int64>(filesize));
-    bindTextOrNull(stmt, 6, dst.c_str());
-    bindTextOrNull(stmt, 7, status.c_str());
+    bindTextOrNull(stmt, 6, dst);
+    bindTextOrNull(stmt, 7, status);
 
     int rc = sqlite3_step(stmt);
 
@@ -202,7 +206,7 @@ void update_status(const std::string &src, const std::string &status) {
     sqlite3_stmt *stmt;
 
     const char *sql =
-        "UPDATE processed_files SET status=? WHERE src=?;";
+        "UPDATE processed_files SET status=? WHERE source_path=?;";
 
     sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
 
