@@ -2,3 +2,4 @@ test/*
 !test/*.sh
 !test/*.py
 filesorter
+.config
