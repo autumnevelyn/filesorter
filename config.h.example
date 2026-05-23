@@ -1,0 +1,8 @@
+// Input / output
+#define SOURCE_ROOT "test/recovered_files/"
+#define DEST_ROOT "test/sorted_files/"
+
+// Database
+#define DB_NAME "sorting_progress.db"
+
+// #define DBG

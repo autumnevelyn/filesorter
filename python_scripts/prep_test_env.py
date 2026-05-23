@@ -9,7 +9,7 @@ from pathlib import Path
 # CONFIG
 # =========================================================
 
-ROOT = Path("./mock_recovery").resolve()
+ROOT = Path("../tests/mock_recovery").resolve()
 
 RECREATE = True
 

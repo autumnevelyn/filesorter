@@ -11,32 +11,9 @@
 
 #include <openssl/sha.h>
 
+#include "config.h"
+
 namespace fs = std::filesystem;
-
-// CONFIG
-// #define DBG
-std::unordered_map<std::string, std::string> config;
-
-void load_config(const std::string &path) {
-    std::ifstream file(path);
-    std::string line;
-
-    while (std::getline(file, line)) {
-
-        // skip comments / empty lines
-        if (line.empty() || line[0] == '#')
-            continue;
-
-        auto pos = line.find('=');
-        if (pos == std::string::npos)
-            continue;
-
-        std::string key = line.substr(0, pos);
-        std::string value = line.substr(pos + 1);
-
-        config[key] = value;
-    }
-}
 
 // HELPERS
 
@@ -121,9 +98,9 @@ std::string sha256_file(const fs::path &file) {
 sqlite3 *db;
 
 void init_db() {
-    fs::create_directories(config["DEST_ROOT"]);
+    fs::create_directories(DEST_ROOT);
 
-    fs::path db_path = fs::path(config["DEST_ROOT"]) / config["DB_NAME"];
+    fs::path db_path = fs::path(DEST_ROOT) / DB_NAME;
 
     sqlite3_open(db_path.c_str(), &db);
     sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
@@ -238,7 +215,7 @@ int process_file(const fs::path &file, const std::string &recup_dir) {
     std::string hash = sha256_file(file);
     logd("hash: ",  hash);
 
-    fs::path dest_dir = fs::path(config["DEST_ROOT"]) / type / recup_dir;
+    fs::path dest_dir = fs::path(DEST_ROOT) / type / recup_dir;
     fs::path path = build_unique_dest_path(dest_dir, file.filename().string());
     logd("path: ",  path);
 
@@ -267,7 +244,6 @@ int process_file(const fs::path &file, const std::string &recup_dir) {
 
 // MAIN
 int main() {
-    load_config(".config");
     init_db();
 
     magic_cookie = magic_open(MAGIC_MIME_TYPE);
@@ -284,7 +260,7 @@ int main() {
 
     std::vector<fs::path> recups;
 
-    for (auto &p : fs::directory_iterator(config["SOURCE_ROOT"])) {
+    for (auto &p : fs::directory_iterator(SOURCE_ROOT)) {
         if (p.is_directory() &&
             p.path().filename().string().find("recup_dir.") == 0) {
             recups.push_back(p.path());
@@ -293,12 +269,14 @@ int main() {
     std::sort(recups.begin(), recups.end());
 
     int idx = 1;
-    vector<int> totals;
+    std::vector<int> totals(4);
+
     for (auto &dir : recups) {
         std::cout << "[" << idx++ << "/" << recups.size()
                   << "] " << dir.filename() << std::endl;
 
         int count = 0;
+        int nCurrentSkipped = totals[1] + totals[2];
         for (auto &file : fs::directory_iterator(dir)) {
             if (!file.is_regular_file()) continue;
 
@@ -307,7 +285,7 @@ int main() {
             totals[ret]++;
 
             if (++count % 100 == 0) {
-                std::cout << "  processed " << count << " files\n";
+                std::cout << "  processed " << count << " files (" << (totals[1] + totals[2] - nCurrentSkipped) << " skipped)\n";
             }
         }
     }
@@ -315,6 +293,6 @@ int main() {
     sqlite3_close(db);
 
     std::cout << "Done.\n";
-    std::cout << "Success: " << totals[0] << "; Empty: " << totals[1] << "; Duplicates: " << totals[2] << "; Error: " << totals[3] << std::endl;
+    std::cout << "Processed filed:\n\tSuccess\t" << totals[0] << "\n\tEmpty\t" << totals[1] << "\n\tDuplicate\t" << totals[2] << "\n\tError\t" << totals[3] << std::endl;
     return 0;
 }

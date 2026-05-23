@@ -1,1 +1,0 @@
-python3 prep_test_env.py
