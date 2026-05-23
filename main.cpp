@@ -14,7 +14,7 @@
 namespace fs = std::filesystem;
 
 // CONFIG
-#define DBG
+// #define DBG
 std::unordered_map<std::string, std::string> config;
 
 void load_config(const std::string &path) {
@@ -65,9 +65,9 @@ void logd(std::string message, auto variable){
 // MAGIC DETECTION
 magic_t magic_cookie;
 std::string detect_filetype(const fs::path &file) {
-    const std::string UNKNOWN_TYPE = "unknown" 
+    const std::string UNKNOWN_TYPE = "unknown";
     const char *result = magic_file(magic_cookie, file.c_str());
-    logd("mime type: ",  result);
+    //logd("mime type: ", result);
 
     if (!result) return UNKNOWN_TYPE;
 
@@ -218,7 +218,7 @@ void update_status(const std::string &src, const std::string &status) {
 }
 
 // PROCESS FILE
-void process_file(const fs::path &file, const std::string &recup_dir) {
+int process_file(const fs::path &file, const std::string &recup_dir) {
 
     std::string src = fs::absolute(file).string();
     logd("src: ",  src);
@@ -226,9 +226,9 @@ void process_file(const fs::path &file, const std::string &recup_dir) {
     uintmax_t filesize = fs::file_size(file);
     logd("filesize: ",  filesize);
     if (filesize <= 0){
-        std::cout << "Empty file, skipped: " << file << std::endl;
+        logd("Empty file, skipped: ", file);
         fs::remove(file);
-        return;
+        return 1;
     }
 
     // read filetype
@@ -247,19 +247,21 @@ void process_file(const fs::path &file, const std::string &recup_dir) {
 
     // duplicate content
     if (!inserted) {
-        std::cout << "Duplicate: " << file << std::endl;
+        logd("Duplicate: ", file);
         fs::remove(file);
 
-        return;
+        return 2;
     }
 
     try {
         fs::create_directories(dest_dir);
         fs::rename(file, path);
         update_status(src, "success");
+        return 0;
     }
     catch (...) {
         update_status(src, "error");
+        return 3;
     }
 }
 
@@ -291,6 +293,7 @@ int main() {
     std::sort(recups.begin(), recups.end());
 
     int idx = 1;
+    vector<int> totals;
     for (auto &dir : recups) {
         std::cout << "[" << idx++ << "/" << recups.size()
                   << "] " << dir.filename() << std::endl;
@@ -299,7 +302,9 @@ int main() {
         for (auto &file : fs::directory_iterator(dir)) {
             if (!file.is_regular_file()) continue;
 
-            process_file(file.path(), dir.filename().string());
+            int ret = process_file(file.path(), dir.filename().string());
+
+            totals[ret]++;
 
             if (++count % 100 == 0) {
                 std::cout << "  processed " << count << " files\n";
@@ -310,5 +315,6 @@ int main() {
     sqlite3_close(db);
 
     std::cout << "Done.\n";
+    std::cout << "Success: " << totals[0] << "; Empty: " << totals[1] << "; Duplicates: " << totals[2] << "; Error: " << totals[3] << std::endl;
     return 0;
 }
